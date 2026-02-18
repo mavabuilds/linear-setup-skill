@@ -5,6 +5,8 @@ set -euo pipefail
 REPO="schpet/linear-cli"
 SKILL_BRANCH="main"
 SKILL_PATH="skills/linear-cli"
+SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATES_DIR="${SETUP_DIR}/../templates"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,7 +24,8 @@ Usage: setup.sh [OPTIONS] [TARGET_DIR]
 
 Options:
   --install-only    Install binary only, skip auth and skill copy
-  --skill-only DIR  Copy skill into DIR only, skip install and auth
+  --skill-only DIR  Copy skills into DIR only, skip install and auth
+  --no-sync         Skip installing the linear-sync skill and scripts
   --help            Show this help
 
 TARGET_DIR defaults to current directory.
@@ -30,7 +33,9 @@ TARGET_DIR defaults to current directory.
 What it does:
   1. Installs linear CLI binary (schpet/linear-cli)
   2. Authenticates with Linear (opens browser)
-  3. Copies the agent skill into your workspace for AI agent discovery
+  3. Copies the linear-cli agent skill into your workspace
+  4. Copies the linear-sync skill and scripts (pull/push/pull-all)
+  5. Creates .linear/issues/ directory (gitignored)
 EOF
   exit 0
 }
@@ -38,12 +43,14 @@ EOF
 # --- Parse args ---
 INSTALL_ONLY=false
 SKILL_ONLY=false
+NO_SYNC=false
 TARGET_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-only) INSTALL_ONLY=true; shift ;;
     --skill-only)   SKILL_ONLY=true; TARGET_DIR="${2:?--skill-only requires a directory}"; shift 2 ;;
+    --no-sync)      NO_SYNC=true; shift ;;
     --help)         usage ;;
     -*)             die "Unknown option: $1" ;;
     *)              TARGET_DIR="$1"; shift ;;
@@ -194,10 +201,79 @@ copy_skill() {
   done
 }
 
+# --- Copy sync skill + scripts ---
+copy_sync() {
+  local dest="$1"
+
+  if [[ ! -d "$TEMPLATES_DIR/linear-sync" ]]; then
+    warn "Sync templates not found at $TEMPLATES_DIR/linear-sync — skipping sync setup"
+    return 0
+  fi
+
+  # Copy scripts
+  local scripts_dest="${dest}/scripts"
+  mkdir -p "$scripts_dest"
+  cp "${TEMPLATES_DIR}/linear-sync/scripts/linear-pull.sh" "$scripts_dest/"
+  cp "${TEMPLATES_DIR}/linear-sync/scripts/linear-push.sh" "$scripts_dest/"
+  cp "${TEMPLATES_DIR}/linear-sync/scripts/linear-pull-all.sh" "$scripts_dest/"
+  chmod +x "$scripts_dest"/linear-*.sh
+  info "Sync scripts copied to: ${scripts_dest}/"
+
+  # Copy skill
+  local skill_dest=""
+  if [[ -d "${dest}/.claude" ]] || [[ -f "${dest}/.claude/settings.json" ]]; then
+    skill_dest="${dest}/.claude/skills/linear-sync"
+  elif [[ -d "${dest}/.cursor" ]]; then
+    skill_dest="${dest}/.cursor/skills/linear-sync"
+  else
+    skill_dest="${dest}/skills/linear-sync"
+  fi
+
+  mkdir -p "$skill_dest"
+  cp "${TEMPLATES_DIR}/linear-sync/SKILL.md" "$skill_dest/"
+  info "Sync skill copied to: ${skill_dest}/"
+
+  # Set up .linear directory
+  mkdir -p "${dest}/.linear/issues"
+  local gitignore="${dest}/.gitignore"
+  if [[ -f "$gitignore" ]]; then
+    grep -qxF '.linear/' "$gitignore" || echo '.linear/' >> "$gitignore"
+  else
+    echo '.linear/' > "$gitignore"
+  fi
+  info "Created .linear/issues/ directory (gitignored)"
+}
+
+# --- Suggest team configuration ---
+suggest_config() {
+  local dest="$1"
+  local toml="${dest}/.linear.toml"
+
+  if [[ -f "$toml" ]]; then
+    info ".linear.toml already exists — skipping config suggestion"
+    return 0
+  fi
+
+  if ! command -v linear &>/dev/null || ! linear auth whoami &>/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo ""
+  info "Tip: create .linear.toml in your repo root to set default team:"
+  echo ""
+  echo "  [issue.create]"
+  echo "  team = \"YOUR_TEAM_KEY\""
+  echo ""
+  echo "  Run 'linear team list' to see available teams."
+}
+
 # --- Main ---
 if $SKILL_ONLY; then
   copy_skill "$TARGET_DIR"
-  info "Done! Skill copied. Restart your agent/editor to pick it up."
+  if ! $NO_SYNC; then
+    copy_sync "$TARGET_DIR"
+  fi
+  info "Done! Skills copied. Restart your agent/editor to pick them up."
   exit 0
 fi
 
@@ -208,10 +284,16 @@ fi
 if ! $INSTALL_ONLY; then
   auth
   copy_skill "$TARGET_DIR"
+  if ! $NO_SYNC; then
+    copy_sync "$TARGET_DIR"
+  fi
+  suggest_config "$TARGET_DIR"
 fi
 
 echo ""
 info "Setup complete! Next steps:"
-echo "  1. Restart your editor/agent to discover the skill"
+echo "  1. Restart your editor/agent to discover the skills"
 echo "  2. (Optional) Create .linear.toml in your repo to set team defaults"
-echo "  3. Try: linear issue list"
+echo "  3. Run 'linear team list' to find your team key"
+echo "  4. Try: linear issue list"
+echo "  5. Try: scripts/linear-pull.sh <ISSUE_ID>"
