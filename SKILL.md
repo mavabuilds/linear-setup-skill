@@ -25,6 +25,42 @@ The setup script:
 2. Runs `linear auth login` (opens browser for Linear OAuth — one-time)
 3. Copies the linear-cli agent skill into the target workspace
 
+## Authentication in embedded terminals (Cursor, Claude Code, Codex)
+
+`linear auth login` starts an OAuth flow that opens a browser and listens for a callback on localhost. This **does not work** in embedded/agent terminals (Cursor's integrated terminal, Claude Code shell, etc.) because the browser redirect can't reach the callback server.
+
+**When running setup from an AI agent, use this two-step approach:**
+
+1. **Install the binary** (agent can do this):
+   ```bash
+   ./scripts/setup.sh --install-only
+   ```
+
+2. **Authenticate from a regular terminal** (user must do this):
+   Open a standalone terminal (Terminal.app, iTerm, etc.) and run:
+   ```bash
+   linear auth login
+   ```
+   This opens the browser, completes OAuth, and stores credentials that persist across all terminals.
+
+3. **Copy the skill** (agent can do this after auth):
+   ```bash
+   ./scripts/setup.sh --skill-only /path/to/project
+   ```
+
+**Alternative — API key auth** (no browser needed):
+1. Create a personal API key at https://linear.app/settings/api
+2. Set it via environment variable or config:
+   ```bash
+   export LINEAR_API_KEY="lin_api_..."
+   ```
+   Or add to `.linear.toml` in the repo root:
+   ```toml
+   api_key = "lin_api_..."
+   ```
+
+**Verify auth works:** `linear auth whoami`
+
 ## Where the skill gets copied
 
 After setup, the agent skill lives at:

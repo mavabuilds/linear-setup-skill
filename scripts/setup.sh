@@ -59,8 +59,13 @@ install_binary() {
     current_version=$(linear --version 2>/dev/null || echo "unknown")
     info "linear CLI already installed ($current_version)"
     
-    read -rp "Reinstall/update? [y/N] " answer
-    [[ "$answer" =~ ^[Yy]$ ]] || return 0
+    if [[ -t 0 ]]; then
+      read -rp "Reinstall/update? [y/N] " answer
+      [[ "$answer" =~ ^[Yy]$ ]] || return 0
+    else
+      info "Non-interactive terminal — skipping reinstall prompt (use linear self-update to update)"
+      return 0
+    fi
   fi
 
   info "Installing linear CLI..."
@@ -85,6 +90,23 @@ auth() {
     local user
     user=$(linear auth whoami 2>/dev/null | head -1)
     info "Already authenticated as: $user"
+    return 0
+  fi
+
+  # linear auth login requires a browser + localhost callback, which fails in
+  # embedded terminals (Cursor, Claude Code, Codex). Detect and guide the user.
+  if [[ ! -t 0 ]] || [[ "${CURSOR_TERMINAL:-}" == "1" ]] || [[ -n "${CLAUDE_CODE:-}" ]] || [[ -n "${CODEX:-}" ]]; then
+    warn "Embedded/non-interactive terminal detected."
+    warn "linear auth login requires a browser callback that won't work here."
+    echo ""
+    echo "  Option 1: Run in a standalone terminal (Terminal.app, iTerm, etc.):"
+    echo "    linear auth login"
+    echo ""
+    echo "  Option 2: Set a personal API key from https://linear.app/settings/api :"
+    echo "    export LINEAR_API_KEY=\"lin_api_...\""
+    echo ""
+    warn "Skipping auth — complete it manually, then re-run this script or run:"
+    echo "    $0 --skill-only ${TARGET_DIR}"
     return 0
   fi
 
@@ -114,6 +136,24 @@ copy_skill() {
   # Get SKILL.md
   if ! curl -fsSL "${base_url}/SKILL.md" -o "${tmpdir}/SKILL.md" 2>/dev/null; then
     die "Failed to download skill from ${REPO}. Check your network connection."
+  fi
+
+  # Patch Prerequisites: replace the upstream "follow the link" section with
+  # actionable install/auth instructions that work in embedded agent terminals.
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local patch_file="${script_dir}/prerequisites-patch.md"
+  local patch_marker="If not installed, follow the instructions at:"
+
+  if [[ -f "$patch_file" ]] && grep -q "$patch_marker" "${tmpdir}/SKILL.md" 2>/dev/null; then
+    info "Patching Prerequisites with install/auth instructions..."
+    awk -v patch_file="$patch_file" '
+      /^## Prerequisites$/ { print; in_prereq=1; while ((getline line < patch_file) > 0) print line; next }
+      in_prereq && /^## / { in_prereq=0 }
+      !in_prereq { print }
+    ' "${tmpdir}/SKILL.md" > "${tmpdir}/SKILL.md.patched"
+    mv "${tmpdir}/SKILL.md.patched" "${tmpdir}/SKILL.md"
+    info "Prerequisites patched successfully"
   fi
   
   # Try to get the references directory listing
